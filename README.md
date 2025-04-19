@@ -44,17 +44,17 @@
 
 ## 📸 截图
 
-*建议在此处添加几张展示工具界面的截图。*
+![image](https://github.com/user-attachments/assets/faa3e95e-5639-484c-9dc2-7fc00b1bc93d)
 
-**(截图 1: 主界面概览)**
+![image](https://github.com/user-attachments/assets/7ec5a6fe-2cda-4184-9dea-cba96b8bafcc)
 
-**(截图 2: 自然语言查询示例)**
+![image](https://github.com/user-attachments/assets/43604d61-dae8-4573-8791-78bdb05098e5)
 
-**(截图 3: 直接 SQL 查询和结果)**
+![image](https://github.com/user-attachments/assets/53496179-0b8d-4f7f-81d6-f73111de8bfe)
 
-**(截图 4: 数据库结构浏览器)**
+## 详细讲解视频与使用教程
 
-**(截图 5: 表关系图谱)**
+https://www.bilibili.com/video/BV1QRdoYZETh/?spm_id_from=333.1387.homepage.video_card.click&vd_source=26053b834f0ddd4f57b22169d74b6f78
 
 ## 💻 技术栈
 
