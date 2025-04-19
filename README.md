@@ -50,7 +50,6 @@
 
 ![image](https://github.com/user-attachments/assets/43604d61-dae8-4573-8791-78bdb05098e5)
 
-![image](https://github.com/user-attachments/assets/53496179-0b8d-4f7f-81d6-f73111de8bfe)
 
 ## 📹 详细讲解视频与使用教程
 
