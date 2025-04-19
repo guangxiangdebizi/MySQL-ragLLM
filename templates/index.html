@@ -1,0 +1,2008 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MySQL AI 查询工具</title>
+    <!-- 添加Tabulator的CSS和JS -->
+    <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator.min.css" rel="stylesheet">
+    <script type="text/javascript" src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
+    <!-- 使用Tailwind CSS 3 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 添加字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- 使用CodeMirror实现SQL高亮 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/sql/sql.min.js"></script>
+    <!-- 加载图标库 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <!-- 加载Chart.js用于数据可视化 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 加载Vis.js用于关系图谱 -->
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <!-- 加载数据库结构和关系图谱功能 -->
+    <script src="/static/dbviewer.js"></script>
+    <script>
+        // 初始化变量
+        let sqlEditor;
+        let table;
+        let darkMode = document.documentElement.classList.contains('dark');
+        let directSqlEditor; // New editor for direct SQL input
+        
+        // 为Tailwind CSS添加自定义配置
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                        },
+                        dark: {
+                            800: '#1e293b',
+                            900: '#0f172a',
+                        }
+                    }
+                }
+            }
+        }
+
+        // 确保CodeMirror库已加载
+        function ensureCodeMirrorLoaded() {
+            return new Promise((resolve, reject) => {
+                if (typeof CodeMirror !== 'undefined') {
+                    // 检查SQL模式是否加载
+                    if (CodeMirror.modes && CodeMirror.modes.sql) {
+                        resolve(true);
+                        return;
+                    } else {
+                        console.log("CodeMirror已加载但SQL模式未加载，加载SQL模式...");
+                    }
+                } else {
+                    console.log("CodeMirror未加载，开始加载...");
+                }
+                
+                // 创建函数检查是否加载完成
+                function checkLoaded() {
+                    if (typeof CodeMirror !== 'undefined' && 
+                        CodeMirror.modes && 
+                        CodeMirror.modes.sql) {
+                        clearInterval(checkInterval);
+                        console.log("CodeMirror和SQL模式加载完成");
+                        resolve(true);
+                    }
+                }
+                
+                // 定期检查是否加载完成
+                const checkInterval = setInterval(checkLoaded, 100);
+                
+                // 确保主脚本已加载
+                if (typeof CodeMirror === 'undefined') {
+                    const script = document.createElement('script');
+                    script.src = "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js";
+                    script.onload = () => {
+                        console.log("CodeMirror主脚本加载完成");
+                        
+                        // 加载SQL模式
+                        const sqlScript = document.createElement('script');
+                        sqlScript.src = "https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/sql/sql.min.js";
+                        sqlScript.onload = () => {
+                            console.log("SQL模式加载完成");
+                            clearInterval(checkInterval);
+                            resolve(true);
+                        };
+                        sqlScript.onerror = (e) => {
+                            clearInterval(checkInterval);
+                            reject(new Error("SQL模式加载失败"));
+                        };
+                        document.head.appendChild(sqlScript);
+                    };
+                    script.onerror = (e) => {
+                        clearInterval(checkInterval);
+                        reject(new Error("CodeMirror主脚本加载失败"));
+                    };
+                    document.head.appendChild(script);
+                }
+                
+                // 超时处理
+                setTimeout(() => {
+                    clearInterval(checkInterval);
+                    if (typeof CodeMirror === 'undefined') {
+                        reject(new Error("CodeMirror加载超时"));
+                    } else if (!CodeMirror.modes || !CodeMirror.modes.sql) {
+                        reject(new Error("SQL模式加载超时"));
+                    } else {
+                        resolve(true);
+                    }
+                }, 10000); // 10秒超时
+            });
+        }
+    </script>
+    <style>
+        .loading {
+            position: relative;
+            pointer-events: none;
+        }
+        .loading::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.7) url('https://cdnjs.cloudflare.com/ajax/libs/loading-svg/1.0.0/loading.svg') center no-repeat;
+            z-index: 1;
+        }
+        
+        .dark .loading::after {
+            background-color: rgba(15, 23, 42, 0.7);
+        }
+        
+        .error-message {
+            color: #dc2626;
+            padding: 0.5rem;
+            border-radius: 0.375rem;
+            background-color: #fee2e2;
+            margin-top: 0.5rem;
+        }
+        
+        .success-message {
+            color: #059669;
+            padding: 0.5rem;
+            border-radius: 0.375rem;
+            background-color: #d1fae5;
+            margin-top: 0.5rem;
+        }
+        
+        /* 改进Tabulator暗黑模式 */
+        .dark .tabulator {
+            background-color: #1e293b;
+            color: #f1f5f9;
+            border: 1px solid #334155;
+        }
+        
+        .dark .tabulator-header {
+            background-color: #0f172a;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .dark .tabulator-row {
+            background-color: #1e293b;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .dark .tabulator-row.tabulator-row-even {
+            background-color: #0f172a;
+        }
+        
+        .dark .tabulator-footer {
+            background-color: #0f172a;
+            border-top: 1px solid #334155;
+        }
+        
+        /* 改进表格样式（明亮模式） */
+        .tabulator {
+            background-color: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.375rem;
+            font-family: 'Inter', sans-serif;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+        
+        .tabulator-header {
+            background-color: #f9fafb;
+            border-bottom: 2px solid #e5e7eb;
+            font-weight: 600;
+        }
+        
+        .tabulator-header .tabulator-col {
+            background-color: #f9fafb;
+            border-right: 1px solid #e5e7eb;
+            padding: 10px;
+        }
+        
+        .tabulator-row {
+            border-bottom: 1px solid #f3f4f6;
+            transition: background-color 0.2s;
+        }
+        
+        .tabulator-row:hover {
+            background-color: #f3f4f6;
+        }
+        
+        .tabulator-row.tabulator-row-even {
+            background-color: #fafafa;
+        }
+        
+        .tabulator-footer {
+            background-color: #f9fafb;
+            border-top: 1px solid #e5e7eb;
+            padding: 5px;
+        }
+        
+        .tabulator-paginator {
+            font-weight: 500;
+        }
+        
+        .tabulator-page {
+            border: 1px solid #e5e7eb;
+            border-radius: 0.25rem;
+            margin: 0 2px;
+        }
+        
+        .tabulator-page.active {
+            background-color: #0ea5e9;
+            color: white;
+            border-color: #0ea5e9;
+        }
+        
+        /* 改进表格分页按钮 */
+        .tabulator .tabulator-footer .tabulator-page {
+            padding: 4px 8px;
+            margin: 0 2px;
+            border-radius: 0.25rem;
+        }
+        
+        .tabulator .tabulator-footer .tabulator-page:not(.disabled):hover {
+            background-color: #0ea5e9;
+            color: white;
+        }
+        
+        /* 改进CodeMirror暗黑模式 */
+        .dark .CodeMirror {
+            border: 1px solid #334155;
+        }
+        
+        /* 添加滚动条样式 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        
+        .dark ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        
+        .dark ::-webkit-scrollbar-thumb {
+            background: #334155;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        
+        .dark ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+        
+        /* 添加动画效果 */
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        /* 打字机效果 */
+        .typewriter {
+            overflow: hidden;
+            border-right: .15em solid #0ea5e9;
+            white-space: nowrap;
+            margin: 0 auto;
+            animation: 
+                typing 3.5s steps(40, end),
+                blink-caret .75s step-end infinite;
+        }
+        
+        @keyframes typing {
+            from { width: 0 }
+            to { width: 100% }
+        }
+        
+        @keyframes blink-caret {
+            from, to { border-color: transparent }
+            50% { border-color: #0ea5e9 }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 dark:bg-dark-900 text-gray-900 dark:text-gray-100 transition-colors duration-200 font-sans">
+    <div class="flex flex-col md:flex-row h-screen overflow-hidden">
+        <!-- 左侧数据库配置面板 -->
+        <div class="w-full md:w-80 bg-white dark:bg-dark-800 shadow-lg p-6 overflow-y-auto transition-all duration-300">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold">数据库配置</h2>
+                <button id="theme-toggle" class="text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg p-2.5">
+                    <i class="bi bi-moon-stars dark:hidden"></i>
+                    <i class="bi bi-sun hidden dark:inline"></i>
+                </button>
+            </div>
+            <form id="db-config" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">用户名</label>
+                    <input type="text" id="username" name="username" value="root"
+                           class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:focus:border-primary-500 dark:focus:ring-primary-500 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">密码</label>
+                    <input type="password" id="password" name="password"
+                           class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:focus:border-primary-500 dark:focus:ring-primary-500 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">主机地址</label>
+                    <input type="text" id="host" name="host" value="localhost"
+                           class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:focus:border-primary-500 dark:focus:ring-primary-500 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">端口</label>
+                    <input type="text" id="port" name="port" value="3306"
+                           class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:focus:border-primary-500 dark:focus:ring-primary-500 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">数据库</label>
+                    <select id="database" name="database"
+                            class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:focus:border-primary-500 dark:focus:ring-primary-500 dark:text-white">
+                        <option value="">选择数据库...</option>
+                    </select>
+                </div>
+                <div class="mt-4 p-3 border border-gray-200 dark:border-gray-700 rounded-md">
+                    <h3 class="text-sm font-medium mb-2">AI模型连接</h3>
+                    <button type="button" onclick="testLLMConnection()" 
+                            class="w-full bg-green-600 dark:bg-green-700 text-white px-4 py-2 rounded-md hover:bg-green-700 dark:hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-colors duration-200 flex items-center justify-center">
+                        <i class="bi bi-hdd-network mr-2"></i> 测试AI模型连接
+                    </button>
+                    <div id="llm-connection-status" class="text-sm mt-2"></div>
+                </div>
+                <button type="button" onclick="testConnection()" 
+                        class="w-full bg-primary-600 dark:bg-primary-700 text-white px-4 py-2 rounded-md hover:bg-primary-700 dark:hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors duration-200 flex items-center justify-center">
+                    <i class="bi bi-database-check mr-2"></i> 测试连接
+                </button>
+                <div class="flex space-x-2">
+                    <button type="button" onclick="saveConfig()" 
+                            class="flex-1 bg-green-600 dark:bg-green-700 text-white px-4 py-2 rounded-md hover:bg-green-700 dark:hover:bg-green-600 transition-colors duration-200 flex items-center justify-center">
+                        <i class="bi bi-save mr-2"></i> 保存
+                    </button>
+                    <button type="button" onclick="loadConfig()" 
+                            class="flex-1 bg-gray-600 dark:bg-gray-700 text-white px-4 py-2 rounded-md hover:bg-gray-700 dark:hover:bg-gray-600 transition-colors duration-200 flex items-center justify-center">
+                        <i class="bi bi-arrow-repeat mr-2"></i> 加载
+                    </button>
+                </div>
+                <div id="connection-status" class="text-sm"></div>
+            </form>
+        </div>
+
+        <!-- 中间主区域 -->
+        <div class="flex-1 flex flex-col overflow-hidden bg-gray-100 dark:bg-dark-900">
+            <!-- 顶部标签页导航 -->
+            <div class="bg-white dark:bg-dark-800 shadow-sm">
+                <div class="flex overflow-x-auto hide-scrollbar">
+                    <button id="query-tab" class="px-4 py-3 text-primary-600 dark:text-primary-400 border-b-2 border-primary-500 font-medium text-sm whitespace-nowrap" onclick="switchPanel('query')">
+                        SQL查询
+                    </button>
+                    <button id="db-structure-tab" class="px-4 py-3 text-gray-600 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 font-medium text-sm whitespace-nowrap" onclick="switchPanel('db-structure')">
+                        数据库结构
+                    </button>
+                    <button id="relationships-tab" class="px-4 py-3 text-gray-600 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 font-medium text-sm whitespace-nowrap" onclick="switchPanel('relationships')">
+                        表关系图谱
+                    </button>
+                </div>
+            </div>
+            
+            <!-- 内容区域 -->
+            <div class="flex-1 overflow-auto p-4">
+                <!-- 查询面板 - 默认显示 -->
+                <div id="query-panel" class="flex flex-col h-full">
+                    <!-- 新的自然语言查询面板 -->
+                    <div class="bg-white dark:bg-dark-800 rounded-lg shadow-md p-4 mb-4">
+                        <h2 class="text-xl font-bold mb-3 text-primary-600 dark:text-primary-400 flex items-center">
+                            <i class="bi bi-chat-dots mr-2"></i> 自然语言查询
+                        </h2>
+                        <div class="relative mb-4">
+                            <textarea id="nl-question-input" class="w-full h-24 p-3 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500 shadow-sm" placeholder="用自然语言描述你的查询请求 (例如：查找注册最早的5个用户)"></textarea>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button id="nl-submit-btn" onclick="window.handleNlQuerySubmit()" class="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors duration-200 flex items-center shadow-sm">
+                                <i class="bi bi-send-fill mr-1"></i> 提交自然语言查询
+                            </button>
+                            <span id="nl-status" class="text-sm text-gray-500 dark:text-gray-400"></span>
+                        </div>
+                        <p class="text-xs mt-2 text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 p-2 rounded-md border border-gray-200 dark:border-gray-700">
+                            <i class="bi bi-lightbulb-fill text-yellow-500 mr-1"></i> AI 将尝试将你的问题转换为 SQL 并执行。支持复杂查询和自然语言描述。
+                        </p>
+                    </div>
+
+                    <!-- 新的直接SQL查询面板 -->
+                    <div class="bg-white dark:bg-dark-800 rounded-lg shadow-md p-4 mb-4">
+                        <h2 class="text-xl font-bold mb-3 text-primary-600 dark:text-primary-400 flex items-center">
+                            <i class="bi bi-code-square mr-2"></i> 直接 SQL 查询
+                        </h2>
+                        <div class="relative mb-4">
+                            <textarea id="direct-sql-input" class="w-full h-24 p-3 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500 shadow-sm"></textarea>
+                            <!-- CodeMirror 将会应用到这里 -->
+                        </div>
+                        <div class="flex items-center flex-wrap gap-2">
+                            <button id="direct-sql-execute-btn" onclick="window.handleDirectSqlSubmit()" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-md transition-colors duration-200 flex items-center shadow-sm">
+                                <i class="bi bi-play-fill mr-1"></i> 执行 SQL
+                            </button>
+                            <button id="direct-sql-clear-btn" class="bg-gray-500 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition-colors duration-200 flex items-center shadow-sm">
+                                <i class="bi bi-trash mr-1"></i> 清空 SQL 输入
+                            </button>
+                             <button id="clear-history-btn" class="bg-gray-500 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition-colors duration-200 flex items-center shadow-sm">
+                                 <i class="bi bi-arrow-counterclockwise mr-1"></i> 清除历史
+                             </button> 
+                            <span id="direct-sql-status" class="text-sm text-gray-500 dark:text-gray-400"></span>
+                        </div>
+                         <p class="text-xs mt-2 text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 p-2 rounded-md border border-gray-200 dark:border-gray-700">
+                            <i class="bi bi-info-circle-fill text-blue-500 mr-1"></i> 直接执行你输入的 SQL 语句。支持所有标准 SQL 命令，包括 SELECT、INSERT、UPDATE、CREATE 等。
+                        </p>
+                    </div>
+
+                    <div id="results-section" class="flex-1 flex flex-col">
+                        <div id="results-container" class="bg-white dark:bg-dark-800 rounded-lg shadow-md p-4 mb-4">
+                            <h3 class="text-lg font-bold mb-3 text-primary-600 dark:text-primary-400">SQL 查询</h3>
+                            <div id="sql-display" class="bg-gray-50 dark:bg-gray-800 rounded-md p-3 mb-4 font-mono text-sm overflow-x-auto border border-gray-200 dark:border-gray-700"></div>
+                            
+                            <h3 class="text-lg font-bold mb-3 text-primary-600 dark:text-primary-400">查询结果</h3>
+                            <div id="results-table-container" class="overflow-x-auto mb-4 bg-white dark:bg-gray-900 rounded-md border border-gray-200 dark:border-gray-700">
+                                <div id="results-table" class="w-full"></div>
+                            </div>
+                            
+                            <h3 class="text-lg font-bold mb-3 text-primary-600 dark:text-primary-400">AI 解释</h3>
+                            <div id="answer-container" class="bg-blue-50 dark:bg-blue-900/20 rounded-md p-4 border border-blue-100 dark:border-blue-800">
+                                <!-- AI解释将在这里显示 -->
+                            </div>
+                        </div>
+
+                        <div id="query-history" class="hidden bg-white dark:bg-dark-800 rounded-lg shadow-md p-4">
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="text-lg font-medium">查询历史</h3>
+                            <button onclick="clearHistory()" class="text-sm text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-500 flex items-center">
+                                <i class="bi bi-trash mr-1"></i> 清空历史
+                            </button>
+                        </div>
+                            <div id="history-list" class="space-y-3 max-h-96 overflow-y-auto">
+                                <!-- 历史记录项 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+                
+                <!-- 数据库结构面板 - 默认隐藏 -->
+                <div id="db-structure-panel" class="flex flex-col h-full hidden">
+                    <div class="bg-white dark:bg-dark-800 rounded-lg shadow-md p-4 mb-4">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-bold">数据库结构浏览</h2>
+                            <button id="show-db-structure" class="px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-md">
+                                <i class="bi bi-database-fill"></i> 加载数据库结构
+                            </button>
+                        </div>
+                        <p class="text-gray-600 dark:text-gray-400">
+                            查看数据库表结构、列信息和关系，支持交互式浏览和数据编辑。点击表卡片可查看表数据。
+                        </p>
+                    </div>
+                    
+                    <!-- 数据库结构容器 -->
+                    <div id="db-structure-container" class="flex-1 overflow-auto">
+                        <div class="flex items-center justify-center h-full">
+                            <div class="text-center text-gray-500 dark:text-gray-400">
+                                <i class="bi bi-database text-5xl mb-2"></i>
+                                <p>点击"加载数据库结构"按钮以查看数据库结构</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 表数据容器 -->
+                    <div id="table-data-container" class="mt-4 hidden">
+                        <!-- 动态加载表数据 -->
+                    </div>
+                </div>
+                
+                <!-- 表关系图谱面板 - 默认隐藏 -->
+                <div id="relationships-panel" class="flex flex-col h-full hidden">
+                    <div class="bg-white dark:bg-dark-800 rounded-lg shadow-md p-4 mb-4">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-bold">表关系图谱</h2>
+                            <button id="show-relationships" class="px-4 py-2 bg-primary-500 hover:bg-primary-600 text-white rounded-md">
+                                <i class="bi bi-diagram-3-fill"></i> 加载关系图谱
+                            </button>
+                        </div>
+                        <p class="text-gray-600 dark:text-gray-400">
+                            可视化展示数据库表之间的关系，帮助理解数据库设计和表之间的关联。支持交互式浏览和图谱导航。
+                        </p>
+                    </div>
+                    
+                    <!-- 关系图谱容器 -->
+                    <div id="relationships-container" class="flex-1 overflow-auto bg-white dark:bg-dark-800 rounded-lg shadow-md">
+                        <div class="flex items-center justify-center h-full">
+                            <div class="text-center text-gray-500 dark:text-gray-400">
+                                <i class="bi bi-diagram-3 text-5xl mb-2"></i>
+                                <p>点击"加载关系图谱"按钮以查看表之间的关系</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加调试日志按钮 -->
+    <button id="debug-log-btn" onclick="showDebugLogs()" class="fixed bottom-4 right-4 bg-gray-800 dark:bg-gray-600 text-white p-2 rounded-full shadow-lg z-50 hover:bg-gray-700 dark:hover:bg-gray-500 focus:outline-none">
+        <i class="bi bi-bug-fill"></i>
+    </button>
+
+    <!-- 调试日志模态框 -->
+    <div id="debug-log-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center hidden">
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg w-3/4 h-3/4 flex flex-col">
+            <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                <h3 class="text-lg font-medium">调试日志</h3>
+                <button onclick="closeDebugLogs()" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-auto p-4">
+                <pre id="debug-logs" class="font-mono text-xs bg-gray-100 dark:bg-gray-900 p-4 rounded-md overflow-auto h-full">正在加载日志...</pre>
+            </div>
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-between">
+                <button onclick="fetchDebugLogs()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md">
+                    <i class="bi bi-arrow-clockwise mr-1"></i> 刷新日志
+                </button>
+                <button onclick="closeDebugLogs()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-md">
+                    关闭
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error message modal -->
+    <div id="error-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center hidden">
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg w-1/2 max-h-3/4 flex flex-col">
+            <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-red-600 text-white">
+                <h3 class="text-lg font-medium">错误信息</h3>
+                <button onclick="document.getElementById('error-modal').classList.add('hidden')" class="text-white">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-auto p-4">
+                <div id="error-content" class="text-red-600 dark:text-red-400"></div>
+            </div>
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700">
+                <button onclick="document.getElementById('error-modal').classList.add('hidden')" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-md w-full">
+                    关闭
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 初始化编辑器和表格
+        document.addEventListener('DOMContentLoaded', function() {
+            // 切换暗黑模式
+            document.getElementById('theme-toggle').addEventListener('click', function() {
+                document.documentElement.classList.toggle('dark');
+                darkMode = document.documentElement.classList.contains('dark');
+                
+                // 更新编辑器主题
+                if (sqlEditor) {
+                    sqlEditor.setOption('theme', darkMode ? 'monokai' : 'default');
+                }
+                if (directSqlEditor) {
+                    directSqlEditor.setOption('theme', darkMode ? 'monokai' : 'default');
+                }
+            });
+            
+            // 检查本地存储中的主题设置
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+                darkMode = true;
+        } else {
+            document.documentElement.classList.remove('dark');
+                darkMode = false;
+            }
+            
+            // 加载保存的数据库配置
+            loadConfig();
+            
+            // 加载历史记录
+            updateHistoryDisplay();
+            
+            console.log("页面初始化完成，开始加载编辑器...");
+            
+            // 确保CodeMirror库已加载，然后初始化编辑器
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            function initWithRetry() {
+                retryCount++;
+                console.log(`尝试初始化编辑器 (第${retryCount}次)`);
+                
+                ensureCodeMirrorLoaded()
+                    .then(() => {
+                        console.log("CodeMirror库加载成功，初始化编辑器");
+                        setTimeout(() => {
+                            const success = initializeEditors();
+                            if (!success && retryCount < maxRetries) {
+                                console.log(`编辑器初始化失败，${maxRetries - retryCount}秒后重试...`);
+                                setTimeout(initWithRetry, 1000 * (maxRetries - retryCount));
+                            }
+                        }, 100); // 短暂延迟确保DOM已完全就绪
+                    })
+                    .catch(error => {
+                        console.error("CodeMirror库加载失败:", error);
+                        if (retryCount < maxRetries) {
+                            console.log(`将在${maxRetries - retryCount}秒后重试...`);
+                            setTimeout(initWithRetry, 1000 * (maxRetries - retryCount)); 
+                        } else {
+                            console.error(`已重试${maxRetries}次，放弃加载`);
+                            showErrorModal("编辑器加载失败", 
+                                `<p>无法加载CodeMirror编辑器库: ${error.message || error}</p>
+                                <p>请检查网络连接并刷新页面，或尝试使用不同的浏览器。</p>`);
+                        }
+                    });
+            }
+            
+            // 开始初始化过程
+            initWithRetry();
+            
+            // 初始化数据库浏览器
+            initDatabaseViewer();
+            
+            // 初始化可视化模块
+            if (typeof initDataVisualization === 'function') {
+                initDataVisualization();
+            }
+            
+            // 初始化完成后，执行额外的组件检查
+            setTimeout(ensureComponentsInitialized, 3000);
+            
+            // 测试API连接
+            fetch('/api/debug-logs')
+                .then(response => {
+                    if (!response.ok) {
+                        showErrorModal("API连接问题", "无法连接到API服务。请确保后端服务正在运行。");
+                    }
+                })
+                .catch(error => {
+                    showErrorModal("API连接错误", `连接API时发生错误: ${error.message}<br>请确保后端服务正在运行。`);
+                });
+
+            // 测试LLM API连接
+            setTimeout(() => {
+                fetch('/api/test-llm-connection')
+                    .then(response => response.json())
+                    .then(data => {
+                        const statusDiv = document.getElementById('llm-connection-status');
+                        if (data.success) {
+                            statusDiv.innerHTML = `<div class="success-message"><i class="bi bi-check-circle-fill mr-1"></i> AI模型连接正常</div>`;
+                        } else {
+                            statusDiv.innerHTML = `<div class="error-message"><i class="bi bi-exclamation-triangle-fill mr-1"></i> AI模型连接异常</div>`;
+                            showErrorModal("AI模型连接警告", `
+                                <p>AI模型连接测试失败: ${data.message || data.error || '未知错误'}</p>
+                                <p class="mt-2">这将影响自然语言查询功能。SQL查询功能不受影响。</p>
+                                <p class="mt-2">解决方案:</p>
+                                <ul class="list-disc pl-5 mt-1">
+                                    <li>检查config.py中的API配置</li>
+                                    <li>确认API密钥有效且未过期</li>
+                                    <li>验证API服务可用</li>
+                                </ul>
+                            `);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('测试LLM连接失败:', error);
+                    });
+            }, 2000);
+
+            // --- 新的事件监听器 --- 
+            // 自然语言查询提交按钮
+             const nlSubmitBtn = document.getElementById('nl-submit-btn');
+             if (nlSubmitBtn) {
+                 console.log("Attaching listener to #nl-submit-btn"); // DEBUG
+                 nlSubmitBtn.addEventListener('click', handleNlQuerySubmit);
+             } else {
+                 console.error("Button #nl-submit-btn not found!");
+             }
+
+            // 自然语言输入框 Ctrl+Enter 快捷键
+            const nlInput = document.getElementById('nl-question-input');
+            if (nlInput) {
+                 console.log("Attaching keydown listener to #nl-question-input"); // DEBUG
+                 nlInput.addEventListener('keydown', function(e) {
+                     if (e.ctrlKey && e.key === 'Enter') {
+                         console.log("NL Input Ctrl+Enter detected"); // DEBUG
+                         e.preventDefault();
+                         window.handleNlQuerySubmit();
+                     }
+                 });
+             } else {
+                 console.error("Textarea #nl-question-input not found!");
+             }
+
+            // 直接SQL执行按钮
+            const directSqlExecuteBtn = document.getElementById('direct-sql-execute-btn');
+            if (directSqlExecuteBtn) {
+                 console.log("Attaching listener to #direct-sql-execute-btn"); // DEBUG
+                 directSqlExecuteBtn.addEventListener('click', window.handleDirectSqlSubmit);
+            } else {
+                 console.error("Button #direct-sql-execute-btn not found!");
+             }
+
+            // 直接SQL清空按钮
+            const directSqlClearBtn = document.getElementById('direct-sql-clear-btn');
+            if (directSqlClearBtn) {
+                 console.log("Attaching listener to #direct-sql-clear-btn"); // DEBUG
+                 directSqlClearBtn.addEventListener('click', function() {
+                     console.log("Direct SQL Clear button clicked"); // DEBUG
+                     if (directSqlEditor) {
+                         directSqlEditor.setValue('');
+                         directSqlEditor.focus();
+                     }
+                 });
+            } else {
+                 console.error("Button #direct-sql-clear-btn not found!");
+             }
+             
+            // 清除历史按钮
+            document.getElementById('clear-history-btn').addEventListener('click', function() {
+                clearHistory();
+            });
+        });
+
+        // 新增函数：初始化所有编辑器
+        function initializeEditors() {
+            try {
+                console.log("初始化SQL显示编辑器");
+                
+                // 安全地创建CodeMirror实例
+                function safeCreateEditor(elementId, options) {
+                    try {
+                        const element = document.getElementById(elementId);
+                        if (!element) {
+                            console.error(`元素 #${elementId} 未找到`);
+                            return null;
+                        }
+                        
+                        // 确保CodeMirror已定义
+                        if (typeof CodeMirror !== 'function') {
+                            console.error('CodeMirror未定义，无法创建编辑器');
+                            return null;
+                        }
+                        
+                        // 确保SQL模式已加载
+                        if (options.mode && options.mode.indexOf('sql') > -1 && 
+                            (!CodeMirror.modes || !CodeMirror.modes.sql)) {
+                            console.error('SQL模式未加载，无法使用SQL编辑器');
+                            // 使用一个基础模式
+                            options.mode = 'text';
+                        }
+                        
+                        // 创建编辑器实例
+                        console.log(`为 #${elementId} 创建CodeMirror编辑器`);
+                        return CodeMirror.fromTextArea(element, options);
+                    } catch (e) {
+                        console.error(`创建 #${elementId} 的编辑器时出错:`, e);
+                        return null;
+                    }
+                }
+                
+                // 初始化SQL显示编辑器
+                sqlEditor = safeCreateEditor('sql-display', {
+                    mode: 'text/x-mysql',
+                    theme: document.documentElement.classList.contains('dark') ? 'monokai' : 'default',
+                    lineNumbers: true,
+                    readOnly: true
+                });
+                
+                // 初始化直接SQL输入编辑器 (新)
+                const directSqlElement = document.getElementById('direct-sql-input');
+                if (directSqlElement) {
+                    console.log("初始化直接SQL输入编辑器");
+                    // 检查是否已经初始化过
+                    if (directSqlElement.nextSibling && 
+                        directSqlElement.nextSibling.className && 
+                        directSqlElement.nextSibling.className.indexOf('CodeMirror') > -1) {
+                        console.log("编辑器已经初始化，获取现有实例");
+                        // 编辑器已经初始化，获取实例
+                        directSqlEditor = directSqlElement.nextSibling.CodeMirror;
+                    } else {
+                        // 全新初始化
+                        directSqlEditor = safeCreateEditor('direct-sql-input', {
+                            mode: 'text/x-mysql',
+                            theme: document.documentElement.classList.contains('dark') ? 'monokai' : 'default',
+                            lineNumbers: true,
+                            placeholder: '输入要直接执行的SQL语句...'
+                        });
+                    }
+                    
+                    // 验证编辑器是否成功初始化
+                    if (directSqlEditor && typeof directSqlEditor.setValue === 'function') {
+                        console.log("直接SQL编辑器初始化成功");
+                    } else {
+                        // 如果编辑器初始化失败，创建一个基本的textarea作为替代
+                        console.log("直接SQL编辑器初始化失败，使用基本textarea");
+                        const textarea = document.getElementById('direct-sql-input');
+                        textarea.style.display = 'block';
+                        textarea.style.width = '100%';
+                        textarea.style.height = '150px';
+                        textarea.placeholder = '输入要执行的SQL语句...';
+                        
+                        // 创建一个简单的编辑器对象以保持接口一致
+                        directSqlEditor = {
+                            getValue: function() {
+                                return textarea.value;
+                            },
+                            setValue: function(value) {
+                                textarea.value = value;
+                            },
+                            focus: function() {
+                                textarea.focus();
+                            }
+                        };
+                    }
+                } else {
+                    console.error("未找到direct-sql-input元素");
+                }
+                
+                // 初始化结果表格
+                console.log("初始化结果表格");
+                try {
+                    // 确保结果容器存在
+                    const tableContainer = document.getElementById('results-table-container');
+                    if (!tableContainer) {
+                        console.error("找不到结果表格容器");
+                        return false;
+                    }
+
+                    if (!table || typeof table.setData !== 'function') {
+                        console.log("创建新的表格实例");
+                        // 清除容器内容
+                        tableContainer.innerHTML = '';
+                        
+                        // 创建表格实例
+                        table = new Tabulator("#results-table-container", {
+                            layout: "fitColumns",
+                            pagination: "local",
+                            paginationSize: 10,
+                            paginationSizeSelector: [5, 10, 20, 50],
+                            movableColumns: true,
+                            height: "auto", // 自动高度
+                            resizableRows: true,
+                            placeholder: "暂无数据",
+                            selectable: true,
+                            responsiveLayout: "collapse",
+                            columnHeaderVertAlign: "middle",
+                            layout: "fitDataFill", // 使列宽适应内容和表格
+                            columnDefaults: {
+                                resizable: true,
+                                headerFilter: true,
+                                headerFilterPlaceholder: "搜索...",
+                                headerSortStartingDir: "asc",
+                                hozAlign: "left",
+                                vertAlign: "middle",
+                                tooltip: true
+                            },
+                            locale: true,
+                            langs: {
+                                "zh-cn": {
+                                    "pagination": {
+                                        "page_size": "每页行数:",
+                                        "page_title": "显示页面",
+                                        "first": "首页",
+                                        "first_title": "首页",
+                                        "last": "末页",
+                                        "last_title": "末页",
+                                        "prev": "上一页",
+                                        "prev_title": "上一页",
+                                        "next": "下一页",
+                                        "next_title": "下一页"
+                                    },
+                                    "headerFilters": {
+                                        "default": "搜索列...",
+                                        "columns": {}
+                                    }
+                                }
+                            }
+                        });
+                        table.setLocale("zh-cn");
+                        
+                        // 测试表格
+                        try {
+                            // 测试数据
+                            const testData = [{ test: "测试行" }];
+                            console.log("设置测试数据:", testData);
+                            table.setData(testData);
+                            
+                            // 清空测试数据
+                            setTimeout(() => {
+                                console.log("清空测试数据");
+                                table.clearData();
+                            }, 500);
+                            
+                        } catch (testError) {
+                            console.error("表格测试失败:", testError);
+                        }
+                        
+                        console.log("结果表格初始化成功");
+                    } else {
+                        console.log("结果表格已存在，可能需要刷新");
+                        try {
+                            // 刷新表格
+                            table.redraw(true);
+                            console.log("表格已刷新");
+                        } catch (redrawError) {
+                            console.error("表格刷新失败:", redrawError);
+                        }
+                    }
+                    return true;
+                } catch (tableError) {
+                    console.error("结果表格初始化失败:", tableError);
+                    // 创建备用表格容器
+                    try {
+                        const container = document.getElementById('results-table-container');
+                        if (container) {
+                            container.innerHTML = '<div class="p-4 border border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-800 rounded-md text-red-600 dark:text-red-400">表格初始化失败，将使用基本HTML表格显示结果。</div>';
+                        }
+                    } catch (e) {
+                        console.error("创建备用表格容器失败:", e);
+                    }
+                    return false;
+                }
+                
+                return true;
+            } catch (e) {
+                console.error("编辑器初始化失败:", e);
+                showErrorModal("编辑器初始化失败", `
+                    <p>出现错误: ${e.message}</p>
+                    <p class="mt-2">可能的原因:</p>
+                    <ul class="list-disc pl-5 mt-1">
+                        <li>CodeMirror库未正确加载</li>
+                        <li>HTML元素未找到</li>
+                        <li>浏览器兼容性问题</li>
+                    </ul>
+                    <p class="mt-2">请尝试刷新页面。</p>
+                `);
+                return false;
+            }
+        }
+
+        // 测试数据库连接
+        async function testConnection() {
+            const config = getDbConfig();
+            const statusDiv = document.getElementById('connection-status');
+            statusDiv.innerHTML = '';
+            
+            // 添加加载状态
+            const button = document.querySelector('button[onclick="testConnection()"]');
+            button.disabled = true;
+            button.innerHTML = '<i class="bi bi-arrow-repeat animate-spin mr-2"></i> 连接中...';
+            
+            try {
+                const response = await fetch('/api/test-connection', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(config),
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    showMessage('连接成功！', 'success');
+                    
+                    // 更新数据库下拉列表
+                    if (data.databases) {
+                        const dbSelect = document.getElementById('database');
+                        dbSelect.innerHTML = '<option value="">选择数据库...</option>';
+                        data.databases.forEach(db => {
+                            const option = document.createElement('option');
+                            option.value = db;
+                            option.textContent = db;
+                            dbSelect.appendChild(option);
+                        });
+                    }
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (error) {
+                showMessage('连接失败：' + error.message, 'error');
+            } finally {
+                // 恢复按钮状态
+                button.disabled = false;
+                button.innerHTML = '<i class="bi bi-database-check mr-2"></i> 测试连接';
+            }
+        }
+
+        // 获取数据库配置
+        function getDbConfig() {
+            return {
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
+                host: document.getElementById('host').value,
+                port: document.getElementById('port').value,
+                database: document.getElementById('database').value,
+            };
+        }
+
+        // 保存配置到 localStorage
+        function saveConfig() {
+            const config = getDbConfig();
+            localStorage.setItem('dbConfig', JSON.stringify(config));
+            showMessage('配置已保存', 'success');
+        }
+
+        // 从 localStorage 加载配置
+        function loadConfig() {
+            const savedConfig = localStorage.getItem('dbConfig');
+            if (savedConfig) {
+                const config = JSON.parse(savedConfig);
+                Object.entries(config).forEach(([key, value]) => {
+                    const element = document.getElementById(key);
+                    if (element) element.value = value;
+                });
+                showMessage('配置已加载', 'success');
+            } else {
+                showMessage('没有找到保存的配置', 'error');
+            }
+        }
+
+        // 显示消息提示
+        function showMessage(message, type = 'error') {
+            const statusDiv = document.getElementById('connection-status');
+            statusDiv.innerHTML = '';
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = type === 'error' ? 'error-message mt-2 fade-in' : 'success-message mt-2 fade-in';
+            messageDiv.innerHTML = `<i class="bi ${type === 'error' ? 'bi-exclamation-triangle' : 'bi-check-circle'} mr-1"></i> ${message}`;
+            statusDiv.appendChild(messageDiv);
+            
+            // 3秒后自动消失
+            setTimeout(() => {
+                messageDiv.style.opacity = '0';
+                messageDiv.style.transition = 'opacity 0.5s';
+                setTimeout(() => messageDiv.remove(), 500);
+            }, 3000);
+        }
+
+        // 添加查询到历史记录
+        function addToHistory(question, sql, results, answer) {
+            let history = JSON.parse(localStorage.getItem('queryHistory') || '[]');
+            
+            // 限制历史记录数量
+            if (history.length >= 20) {
+                history.pop(); // 移除最老的记录
+            }
+            
+            // 添加新记录到开头
+            history.unshift({
+                timestamp: new Date().toISOString(),
+                question: question,
+                sql: sql,
+                results: results.slice(0, 10),  // 只保存部分结果
+                answer: answer
+            });
+            
+            localStorage.setItem('queryHistory', JSON.stringify(history));
+            updateHistoryDisplay();
+        }
+
+        // 更新历史记录显示
+        function updateHistoryDisplay() {
+            const historyList = document.getElementById('history-list');
+            if (!historyList) return;
+            
+            const history = JSON.parse(localStorage.getItem('queryHistory') || '[]');
+            
+            if (history.length === 0) {
+                historyList.innerHTML = '<div class="text-gray-500 dark:text-gray-400 text-center py-4">暂无查询历史</div>';
+                return;
+            }
+            
+            historyList.innerHTML = '';
+            
+            history.forEach((item, index) => {
+                const date = new Date(item.timestamp);
+                const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+                
+                const historyItem = document.createElement('div');
+                historyItem.className = 'bg-gray-50 dark:bg-gray-800 p-3 rounded-lg';
+                
+                historyItem.innerHTML = `
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-xs text-gray-500 dark:text-gray-400">${dateStr}</span>
+                        <button onclick="loadHistoryItem(${index})" class="text-xs bg-primary-500 hover:bg-primary-600 text-white px-2 py-1 rounded">
+                            加载
+                        </button>
+                    </div>
+                    <div class="font-medium truncate">${item.question}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate">${item.sql}</div>
+                `;
+                
+                historyList.appendChild(historyItem);
+            });
+        }
+        
+        // 加载历史记录项
+        function loadHistoryItem(index) {
+            const history = JSON.parse(localStorage.getItem('queryHistory') || '[]');
+            if (index >= history.length) return;
+            
+            const item = history[index];
+            
+            // 填充SQL编辑器
+            if (directSqlEditor && item.sql) {
+                directSqlEditor.setValue(item.sql);
+            }
+            
+            // 更新SQL显示
+            if (sqlEditor && item.sql) {
+                sqlEditor.setValue(item.sql);
+            }
+            
+            // 更新表格
+            if (table && item.results) {
+                table.setData(item.results);
+            }
+            
+            // 更新AI回答
+            if (document.getElementById('answer-container') && item.answer) {
+                document.getElementById('answer-container').innerHTML = item.answer;
+            }
+            
+            // 显示结果容器
+            document.getElementById('results-container').classList.remove('hidden');
+            
+            // 切换回查询标签页
+            switchTab('results');
+        }
+
+        // 清空历史记录
+        function clearHistory() {
+                localStorage.removeItem('queryHistory');
+                updateHistoryDisplay();
+            showMessage('历史记录已清空', 'success');
+        }
+
+        // 复制内容到剪贴板
+        function copyToClipboard(type) {
+            let content = '';
+            if (type === 'sql') {
+                content = sqlEditor.getValue();
+            }
+            
+            if (!content) {
+                showMessage('没有内容可复制', 'error');
+                return;
+            }
+            
+            navigator.clipboard.writeText(content).then(() => {
+                showMessage('已复制到剪贴板', 'success');
+            }).catch(err => {
+                showMessage('复制失败: ' + err, 'error');
+            });
+        }
+
+        // 导出结果
+        function exportResults(format) {
+            const data = table.getData();
+            if (!data || data.length === 0) {
+                showMessage('没有数据可导出', 'error');
+                return;
+            }
+            
+            let content = '';
+            let filename = `query-results-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}.${format}`;
+            
+            if (format === 'csv') {
+                // 获取所有列名
+                const columns = table.getColumns().map(col => col.getField());
+                content = columns.join(',') + '\n';
+                
+                // 添加所有行
+                content += data.map(row => {
+                    return columns.map(col => {
+                        let value = row[col];
+                        // 如果是包含逗号的字符串，加引号
+                        if (typeof value === 'string' && value.includes(',')) {
+                            return `"${value}"`;
+                        }
+                        return value !== undefined && value !== null ? value : '';
+                    }).join(',');
+                }).join('\n');
+            } else if (format === 'json') {
+                content = JSON.stringify(data, null, 2);
+            }
+            
+            // 创建下载链接
+            const blob = new Blob([content], { type: format === 'csv' ? 'text/csv' : 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // 显示详细错误模态框
+        function showErrorModal(title, message) {
+            const errorContent = document.getElementById('error-content');
+            errorContent.innerHTML = `
+                <h4 class="font-bold mb-2">${title}</h4>
+                <div class="bg-red-100 dark:bg-red-900/30 p-3 rounded-md">
+                    ${message}
+                </div>
+                <div class="mt-4">
+                    <p class="font-medium">可能的解决方案:</p>
+                    <ul class="list-disc pl-5 mt-2 space-y-1">
+                        <li>检查数据库连接配置是否正确</li>
+                        <li>确认后端服务是否正常运行</li>
+                        <li>检查API密钥配置（如果适用）</li>
+                        <li>尝试刷新页面后重试</li>
+                        <li>查看控制台和服务器日志获取更多信息</li>
+                    </ul>
+                </div>
+            `;
+            document.getElementById('error-modal').classList.remove('hidden');
+        }
+
+        // 确保组件初始化完成的函数
+        function ensureComponentsInitialized() {
+            console.log("检查组件初始化状态...");
+            let needReinitialization = false;
+            
+            // 检查编辑器状态
+            if (!sqlEditor || !directSqlEditor || !table) {
+                console.warn("检测到未初始化的组件，尝试重新初始化");
+                needReinitialization = true;
+            } else {
+                // 验证组件功能是否正常
+                try {
+                    // 测试直接SQL编辑器
+                    if (typeof directSqlEditor.getValue !== 'function') {
+                        console.warn("直接SQL编辑器验证失败");
+                        needReinitialization = true;
+                    }
+                    
+                    // 测试SQL显示编辑器
+                    if (typeof sqlEditor.setValue !== 'function') {
+                        console.warn("SQL显示编辑器验证失败");
+                        needReinitialization = true;
+                    }
+                    
+                    // 测试表格
+                    if (typeof table.setData !== 'function') {
+                        console.warn("结果表格验证失败");
+                        needReinitialization = true;
+                    } else {
+                        // 测试表格数据设置
+                        try {
+                            // 测试空数据设置
+                            table.setData([]);
+                            console.log("表格空数据设置测试成功");
+                            
+                            // 测试样本数据设置
+                            const sampleData = [
+                                { id: 1, name: '测试1' },
+                                { id: 2, name: '测试2' }
+                            ];
+                            table.setData(sampleData);
+                            console.log("表格样本数据设置测试成功");
+                            
+                            // 清除测试数据
+                            table.clearData();
+                        } catch (e) {
+                            console.error("表格数据设置测试失败:", e);
+                            needReinitialization = true;
+                        }
+                    }
+                } catch (error) {
+                    console.error("组件验证时出错:", error);
+                    needReinitialization = true;
+                }
+            }
+            
+            // 如果需要重新初始化，则重新加载编辑器
+            if (needReinitialization) {
+                console.log("重新初始化组件...");
+                ensureCodeMirrorLoaded()
+                    .then(() => {
+                        initializeEditors();
+                        console.log("组件重新初始化完成");
+                    })
+                    .catch(error => {
+                        console.error("组件重新初始化失败:", error);
+                    });
+            } else {
+                console.log("所有组件已正确初始化");
+            }
+        }
+
+        // 显示调试日志模态框
+        function showDebugLogs() {
+            document.getElementById('debug-log-modal').classList.remove('hidden');
+            fetchDebugLogs();
+        }
+        
+        // 关闭调试日志模态框
+        function closeDebugLogs() {
+            document.getElementById('debug-log-modal').classList.add('hidden');
+        }
+        
+        // 获取调试日志
+        async function fetchDebugLogs() {
+            try {
+                const response = await fetch('/api/debug-logs');
+                const data = await response.json();
+                document.getElementById('debug-logs').textContent = data.logs || '没有日志记录';
+            } catch (error) {
+                document.getElementById('debug-logs').textContent = '获取日志失败: ' + error.message;
+            }
+        }
+
+        // 测试LLM API连接
+        async function testLLMConnection() {
+            const statusDiv = document.getElementById('llm-connection-status');
+            statusDiv.innerHTML = '';
+            
+            // 添加加载状态
+            const button = document.querySelector('button[onclick="testLLMConnection()"]');
+            button.disabled = true;
+            button.innerHTML = '<i class="bi bi-arrow-repeat animate-spin mr-2"></i> 连接中...';
+            
+            try {
+                const response = await fetch('/api/test-llm-connection');
+                const data = await response.json();
+                
+                if (data.success) {
+                    showMessage('AI模型连接成功！', 'success');
+                    statusDiv.innerHTML = `<div class="success-message mt-2"><i class="bi bi-check-circle-fill mr-1"></i> ${data.message}</div>`;
+                } else {
+                    throw new Error(data.error || data.message || '连接失败，未知错误');
+                }
+            } catch (error) {
+                console.error('AI模型连接测试失败:', error);
+                showMessage('AI模型连接失败', 'error');
+                statusDiv.innerHTML = `<div class="error-message mt-2"><i class="bi bi-exclamation-triangle-fill mr-1"></i> ${error.message}</div>`;
+                
+                // 显示更详细的错误
+                showErrorModal("AI模型连接失败", `
+                    <p>错误详情: ${error.message}</p>
+                    <p class="mt-2">可能的原因:</p>
+                    <ul class="list-disc pl-5 mt-1">
+                        <li>API密钥无效或过期</li>
+                        <li>API服务不可用</li>
+                        <li>网络连接问题</li>
+                        <li>配额限制</li>
+                    </ul>
+                    <p class="mt-2">请检查config.py中的API配置。</p>
+                `);
+            } finally {
+                // 恢复按钮状态
+                button.disabled = false;
+                button.innerHTML = '<i class="bi bi-hdd-network mr-2"></i> 测试AI模型连接';
+            }
+        }
+
+        // 切换标签页
+        function switchTab(tabName) {
+            const tabs = ['results', 'sql', 'explanation', 'history'];
+            
+            // 首先隐藏所有内容
+            tabs.forEach(tab => {
+                const contentId = `${tab}-content`;
+                const content = document.getElementById(contentId);
+                if (content) content.classList.add('hidden');
+                
+                const tabButton = document.getElementById(`${tab}-tab`);
+                if (tabButton) {
+                    tabButton.classList.remove('active-tab', 'text-primary-600', 'dark:text-primary-400', 'border-b-2', 'border-primary-500');
+                    tabButton.classList.add('text-gray-600', 'dark:text-gray-400');
+                }
+            });
+            
+            // 显示选中标签页
+            const contentId = `${tabName}-content`;
+            const content = document.getElementById(contentId);
+            if (content) content.classList.remove('hidden');
+            
+            const tabButton = document.getElementById(`${tabName}-tab`);
+            if (tabButton) {
+                tabButton.classList.add('active-tab', 'text-primary-600', 'dark:text-primary-400', 'border-b-2', 'border-primary-500');
+                tabButton.classList.remove('text-gray-600', 'dark:text-gray-400');
+            }
+            
+            // 特殊处理结果区域
+            if (tabName === 'history') {
+                document.getElementById('results-container').classList.add('hidden');
+                document.getElementById('query-history').classList.remove('hidden');
+            } else {
+                document.getElementById('results-container').classList.remove('hidden');
+                document.getElementById('query-history').classList.add('hidden');
+            }
+        }
+
+        // 处理自然语言查询提交
+        async function handleNlQuerySubmit() {
+            console.log("[HANDLER] handleNlQuerySubmit called - global definition"); // DEBUG
+            const questionInput = document.getElementById('nl-question-input');
+            const statusSpan = document.getElementById('nl-status');
+            const submitBtn = document.getElementById('nl-submit-btn');
+            // 保存原始按钮内容为常量
+            const ORIGINAL_BTN_HTML = '<i class="bi bi-send-fill mr-1"></i> 提交自然语言查询';
+
+            const question = questionInput.value.trim();
+            if (!question) {
+                showMessage('请输入自然语言问题', 'error');
+                return;
+            }
+
+            const config = getDbConfig();
+            if (!config.database) {
+                showMessage('请先选择数据库', 'error');
+                return;
+            }
+
+            // UI 更新：显示加载状态
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="bi bi-arrow-repeat animate-spin mr-1"></i> 处理中...';
+            
+            // 确保结果容器可见
+            const resultsContainer = document.getElementById('results-container');
+            if (resultsContainer) {
+                resultsContainer.style.display = 'block';
+                resultsContainer.classList.remove('hidden');
+                resultsContainer.classList.add('loading');
+            }
+            
+            // 确保结果区域可见
+            const resultsSection = document.getElementById('results-section');
+            if (resultsSection) {
+                resultsSection.style.display = 'block';
+            }
+            
+            // 清空之前的结果
+            console.log("清空之前的结果...");
+            if(sqlEditor) {
+                try {
+                    sqlEditor.setValue('');
+                } catch(e) {
+                    console.error("清空SQL编辑器时出错:", e);
+                    const sqlDisplay = document.getElementById('sql-display');
+                    if (sqlDisplay) {
+                        sqlDisplay.textContent = '';
+                    }
+                }
+            }
+            
+            const resultsTableContainer = document.getElementById('results-table-container');
+            if (resultsTableContainer) {
+                try {
+                    if(table && typeof table.clearData === 'function') {
+                        table.clearData();
+                    } else {
+                        resultsTableContainer.innerHTML = '';
+                    }
+                } catch(e) {
+                    console.error("清空表格时出错:", e);
+                    resultsTableContainer.innerHTML = '';
+                }
+            }
+            
+            const answerContainer = document.getElementById('answer-container');
+            if (answerContainer) {
+                answerContainer.innerHTML = '<div class="animate-pulse">AI 正在生成 SQL 并查询...</div>';
+            }
+
+            try {
+                console.log("发送自然语言查询请求...");
+                const response = await fetch('/api/nl-query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question: question, config: config })
+                });
+
+                // --- 改进的错误检查 --- 
+                if (!response.ok) {
+                    let errorMsg = `请求失败 (${response.status} ${response.statusText})`;
+                    let errorDetails = '';
+                    try {
+                        // 尝试解析后端返回的JSON错误信息
+                        const errorData = await response.json();
+                        if (errorData && errorData.error) {
+                            errorDetails = errorData.error; 
+                            errorMsg = errorDetails; // 使用后端提供的具体错误
+                        } else {
+                            // 如果没有JSON错误信息，尝试获取文本响应
+                           errorDetails = await response.text(); 
+                        }
+                    } catch (parseError) {
+                        // 如果响应不是有效的JSON或文本，记录原始状态
+                        console.error("无法解析错误响应体", parseError);
+                        errorDetails = response.statusText;
+                    }
+                    // 将更具体的错误信息抛出
+                    console.error(`后端错误详情: ${errorDetails}`);
+                    throw new Error(errorMsg); 
+                }
+                // --- 结束改进的错误检查 ---
+
+                const data = await response.json(); // 只有当 response.ok 时才解析
+                console.log("收到响应:", data);
+
+                // 检查应用层级的错误（即使状态码是200 OK）
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                // 更新SQL显示
+                console.log("更新SQL显示...");
+                if(sqlEditor) {
+                    try {
+                        sqlEditor.setValue(data.sql || '未能获取SQL');
+                        console.log("SQL编辑器更新完成");
+                        // 尝试设置editor的display属性，确保可见
+                        const editorElement = document.querySelector('.CodeMirror');
+                        if (editorElement) {
+                            editorElement.style.display = 'block';
+                            editorElement.style.height = '120px';
+                        }
+                    } catch(e) {
+                        console.error("设置SQL编辑器内容时出错:", e);
+                        // 回退到简单文本显示
+                        const sqlDisplay = document.getElementById('sql-display');
+                        if (sqlDisplay) {
+                            sqlDisplay.textContent = data.sql || '未能获取SQL';
+                            sqlDisplay.style.display = 'block';
+                        }
+                    }
+                } else {
+                    // SQL编辑器不可用，使用纯文本显示
+                    const sqlDisplay = document.getElementById('sql-display');
+                    if (sqlDisplay) {
+                        sqlDisplay.textContent = data.sql || '未能获取SQL';
+                        sqlDisplay.style.display = 'block';
+                    }
+                }
+
+                // 更新结果表格
+                console.log("更新结果表格，数据:", data.results);
+                if (Array.isArray(data.results) && data.results.length > 0) {
+                    console.log("结果是数组且不为空，共", data.results.length, "条记录");
+                    try {
+                        // 从结果中获取列定义
+                        const columns = Object.keys(data.results[0]).map(key => ({
+                            title: key,
+                            field: key,
+                            sorter: "string"
+                        }));
+                        
+                        // 如果表格不存在，初始化它
+                        if (!table || typeof table.setData !== 'function') {
+                            console.log("表格不存在或无效，尝试初始化...");
+                            const initSuccess = initializeTable();
+                            if (!initSuccess) {
+                                throw new Error("表格初始化失败");
+                            }
+                        }
+                        
+                        // 设置列定义和数据
+                        if (table && typeof table.setColumns === 'function' && typeof table.setData === 'function') {
+                            console.log("使用Tabulator设置表格数据");
+                            table.setColumns(columns);
+                            table.setData(data.results);
+                            console.log("表格数据已设置成功");
+                        } else {
+                            console.log("Tabulator表格不可用，回退到简单表格显示");
+                            displaySimpleTable(data.results);
+                        }
+                    } catch(e) {
+                        console.error("设置表格数据时出错:", e);
+                        // 出错时总是回退到简单表格显示
+                        console.log("出错回退到简单表格显示");
+                        displaySimpleTable(data.results);
+                    }
+                } else {
+                    console.log("结果为空或非数组:", data.results);
+                    if (resultsTableContainer) {
+                        resultsTableContainer.innerHTML = '<div class="text-center p-4 text-gray-500">查询未返回任何结果</div>';
+                    }
+                }
+                
+                // 更新AI解释
+                if (answerContainer) {
+                    answerContainer.innerHTML = data.answer ? data.answer.replace(/\n/g, '<br>') : '<div class="text-gray-500">无AI解释</div>';
+                }
+                
+                if (statusSpan) {
+                    statusSpan.textContent = '查询完成';
+                }
+                
+                // 添加到历史记录
+                addToHistory(question, data.sql || '', data.results || [], data.answer || '');
+
+            } catch (error) {
+                // 现在 error.message 会包含更具体的错误信息
+                console.error("自然语言查询处理失败:", error);
+                if (statusSpan) {
+                    statusSpan.textContent = '查询失败';
+                }
+                // 使用可能更详细的 error.message
+                showErrorModal("自然语言查询失败", `错误: ${error.message}`); 
+                if (answerContainer) {
+                    // 显示同样的详细错误
+                    answerContainer.innerHTML = `<div class="error-message"><i class="bi bi-exclamation-triangle mr-1"></i> 查询失败: ${error.message}</div>`;
+                }
+            } finally {
+                // 恢复UI
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = ORIGINAL_BTN_HTML;
+                }
+                if (resultsContainer) {
+                    resultsContainer.classList.remove('loading');
+                }
+                // 清除状态信息
+                setTimeout(() => { 
+                    if (statusSpan) statusSpan.textContent = '';
+                }, 5000);
+            }
+        }
+
+        // 辅助函数：当Tabulator不可用时显示简单表格
+        function displaySimpleTable(data) {
+            console.log("使用简单表格显示数据:", data);
+            const container = document.getElementById('results-table-container');
+            if (!container) {
+                console.error("找不到结果表格容器");
+                return;
+            }
+            
+            if (!data || !Array.isArray(data) || data.length === 0) {
+                console.log("没有数据可显示");
+                container.innerHTML = '<div class="text-gray-500 text-center py-4">无数据</div>';
+                return;
+            }
+            
+            try {
+                // 创建简单表格
+                let html = '<div class="overflow-x-auto max-h-[500px]"><table class="min-w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700">';
+                
+                // 表头
+                html += '<thead class="sticky top-0"><tr class="bg-gray-100 dark:bg-gray-700">';
+                const columns = Object.keys(data[0]);
+                
+                if (columns.length === 0) {
+                    container.innerHTML = '<div class="text-gray-500 text-center py-4">数据结构无效</div>';
+                    return;
+                }
+                
+                columns.forEach(key => {
+                    html += `<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider border-b border-gray-300 dark:border-gray-700">${key}</th>`;
+                });
+                html += '</tr></thead>';
+                
+                // 表体
+                html += '<tbody>';
+                data.forEach((row, i) => {
+                    html += `<tr class="${i % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-50 dark:bg-gray-900'} hover:bg-gray-100 dark:hover:bg-gray-700">`;
+                    columns.forEach(key => {
+                        const value = row[key];
+                        const displayValue = value !== null && value !== undefined ? value : '';
+                        html += `<td class="px-4 py-2 border-t border-gray-300 dark:border-gray-700 text-sm">${displayValue}</td>`;
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody></table></div>';
+                
+                // 添加结果计数器
+                html += `<div class="mt-2 text-sm text-gray-500 dark:text-gray-400">共 ${data.length} 条记录</div>`;
+                
+                container.innerHTML = html;
+                console.log("简单表格已渲染");
+            } catch (error) {
+                console.error("渲染简单表格时出错:", error);
+                container.innerHTML = `<div class="text-red-500 text-center py-4">
+                    <div class="mb-2"><i class="bi bi-exclamation-triangle-fill"></i> 渲染表格时出错</div>
+                    <div class="text-sm">${error.message}</div>
+                </div>`;
+            }
+        }
+
+        // 直接SQL执行处理函数
+        window.handleDirectSqlSubmit = async function() {
+            console.log("[HANDLER] handleDirectSqlSubmit called - global definition"); // DEBUG
+            const statusSpan = document.getElementById('direct-sql-status');
+            const executeBtn = document.getElementById('direct-sql-execute-btn');
+            // 保存原始按钮内容为常量
+            const ORIGINAL_BTN_HTML = '<i class="bi bi-play-fill mr-1"></i> 执行 SQL';
+
+            if (!directSqlEditor) {
+                showErrorModal("错误", "SQL 输入编辑器未初始化。");
+                return;
+            }
+
+            const sql = directSqlEditor.getValue().trim();
+            if (!sql) {
+                showMessage('请输入要执行的SQL语句', 'error');
+                return;
+            }
+
+            const config = getDbConfig();
+            if (!config.database) {
+                showMessage('请先选择数据库', 'error');
+                return;
+            }
+
+            // UI 更新：显示加载状态
+            executeBtn.disabled = true;
+            executeBtn.innerHTML = '<i class="bi bi-arrow-repeat animate-spin mr-1"></i> 执行中...';
+            statusSpan.textContent = '执行中...';
+            
+            // 确保结果容器可见
+            const resultsContainer = document.getElementById('results-container');
+            if (resultsContainer) {
+                resultsContainer.style.display = 'block';
+                resultsContainer.classList.remove('hidden');
+                resultsContainer.classList.add('loading');
+            }
+            
+            // 确保结果区域可见
+            const resultsSection = document.getElementById('results-section');
+            if (resultsSection) {
+                resultsSection.style.display = 'block';
+            }
+            
+            // 清空之前的结果
+            console.log("清空之前的结果...");
+            if(sqlEditor) {
+                try {
+                    sqlEditor.setValue('');
+                } catch(e) {
+                    console.error("清空SQL编辑器时出错:", e);
+                    const sqlDisplay = document.getElementById('sql-display');
+                    if (sqlDisplay) {
+                        sqlDisplay.textContent = '';
+                    }
+                }
+            }
+            
+            const resultsTableContainer = document.getElementById('results-table-container');
+            if (resultsTableContainer) {
+                try {
+                    if(table && typeof table.clearData === 'function') {
+                        table.clearData();
+                    } else {
+                        resultsTableContainer.innerHTML = '';
+                    }
+                } catch(e) {
+                    console.error("清空表格时出错:", e);
+                    resultsTableContainer.innerHTML = '';
+                }
+            }
+            
+            const answerContainer = document.getElementById('answer-container');
+            if (answerContainer) {
+                answerContainer.innerHTML = '<div class="animate-pulse">正在执行 SQL...</div>';
+            }
+
+            try {
+                console.log("发送直接SQL执行请求...", sql);
+                const response = await fetch('/api/direct-sql', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sql: sql, config: config })
+                });
+
+                const data = await response.json();
+                console.log("收到响应:", data);
+
+                if (!response.ok || data.error) {
+                    throw new Error(data.error || `请求失败 (${response.status})`);
+                }
+
+                // 更新SQL显示
+                console.log("更新SQL显示:", data.sql || sql);
+                if(sqlEditor) {
+                    try {
+                        sqlEditor.setValue(data.sql || sql);
+                        console.log("SQL编辑器更新完成");
+                        // 尝试设置editor的display属性，确保可见
+                        const editorElement = document.querySelector('.CodeMirror');
+                        if (editorElement) {
+                            editorElement.style.display = 'block';
+                            editorElement.style.height = '120px';
+                        }
+                    } catch(e) {
+                        console.error("设置SQL编辑器内容时出错:", e);
+                        // 回退到简单文本显示
+                        const sqlDisplay = document.getElementById('sql-display');
+                        if (sqlDisplay) {
+                            sqlDisplay.textContent = data.sql || sql;
+                            sqlDisplay.style.display = 'block';
+                        }
+                    }
+                } else {
+                    // SQL编辑器不可用，使用纯文本显示
+                    const sqlDisplay = document.getElementById('sql-display');
+                    if (sqlDisplay) {
+                        sqlDisplay.textContent = data.sql || sql;
+                        sqlDisplay.style.display = 'block';
+                    }
+                }
+
+                // 更新结果表格
+                console.log("更新结果表格，数据:", data.results);
+                if (Array.isArray(data.results) && data.results.length > 0) {
+                    console.log("结果是数组且不为空，共", data.results.length, "条记录");
+                    
+                    // 特殊处理非查询语句的结果（如 INSERT, UPDATE 等）
+                    if (data.results.length === 1 && data.results[0].status === 'success') {
+                        if (resultsTableContainer) {
+                            resultsTableContainer.innerHTML = `<div class="text-center p-4 text-green-500">
+                                <i class="bi bi-check-circle mr-2"></i>SQL执行成功，影响 ${data.results[0].rows_affected} 行
+                            </div>`;
+                        }
+                        showMessage(`SQL执行成功，影响 ${data.results[0].rows_affected} 行`, 'success');
+                    } else {
+                        try {
+                            // 从结果中获取列定义
+                            const columns = Object.keys(data.results[0]).map(key => ({
+                                title: key,
+                                field: key,
+                                sorter: "string"
+                            }));
+                            
+                            // 如果表格不存在，初始化它
+                            if (!table || typeof table.setData !== 'function') {
+                                console.log("表格不存在或无效，尝试初始化...");
+                                const initSuccess = initializeTable();
+                                if (!initSuccess) {
+                                    throw new Error("表格初始化失败");
+                                }
+                            }
+                            
+                            // 设置列定义和数据
+                            if (table && typeof table.setColumns === 'function' && typeof table.setData === 'function') {
+                                console.log("使用Tabulator设置表格数据");
+                                table.setColumns(columns);
+                                table.setData(data.results);
+                                console.log("表格数据已设置成功");
+                            } else {
+                                console.log("Tabulator表格不可用，回退到简单表格显示");
+                                displaySimpleTable(data.results);
+                            }
+                        } catch(e) {
+                            console.error("设置表格数据时出错:", e);
+                            // 出错时总是回退到简单表格显示
+                            console.log("出错回退到简单表格显示");
+                            displaySimpleTable(data.results);
+                        }
+                    }
+                } else {
+                    console.log("结果为空或非数组:", data.results);
+                    if (resultsTableContainer) {
+                        resultsTableContainer.innerHTML = '<div class="text-center p-4 text-gray-500">查询未返回任何结果</div>';
+                    }
+                }
+                
+                // 更新AI解释
+                if (answerContainer) {
+                    answerContainer.innerHTML = data.answer ? data.answer.replace(/\n/g, '<br>') : '<div class="text-gray-500">无AI解释</div>';
+                }
+                
+                if (statusSpan) {
+                    statusSpan.textContent = '查询完成';
+                }
+                
+                // 添加到历史记录
+                addToHistory(sql, data.sql || sql, data.results || [], data.answer || ''); // 使用 sql 变量
+
+            } catch (error) {
+                console.error("直接SQL执行失败:", error); // 正确的日志上下文
+                if (statusSpan) {
+                    statusSpan.textContent = '执行失败'; // 正确的状态文本
+                }
+                showErrorModal("直接SQL执行失败", `错误: ${error.message}`); // 正确的错误标题
+                if (answerContainer) {
+                    // 使用更通用的错误显示
+                    answerContainer.innerHTML = `<div class="error-message"><i class="bi bi-exclamation-triangle mr-1"></i> 执行时发生错误: ${error.message}</div>`;
+                }
+            } finally {
+                // 恢复UI - 强制使用常量恢复按钮状态
+                if (executeBtn) {
+                    executeBtn.disabled = false;
+                    executeBtn.innerHTML = ORIGINAL_BTN_HTML;
+                }
+                if (resultsContainer) {
+                    resultsContainer.classList.remove('loading');
+                }
+                // 清除状态信息
+                setTimeout(() => { 
+                    if (statusSpan) statusSpan.textContent = '';
+                }, 5000);
+            }
+        };
+
+        // 给其他按钮添加onclick属性
+        document.addEventListener('DOMContentLoaded', function() {
+            // 直接SQL清空按钮添加onclick事件
+            const directSqlClearBtn = document.getElementById('direct-sql-clear-btn');
+            if (directSqlClearBtn) {
+                directSqlClearBtn.onclick = function() {
+                    console.log("Direct SQL Clear button clicked"); 
+                    if (directSqlEditor) {
+                        directSqlEditor.setValue('');
+                        directSqlEditor.focus();
+                    }
+                };
+            }
+
+            // 清除历史按钮添加onclick事件
+            const clearHistoryBtn = document.getElementById('clear-history-btn');
+            if (clearHistoryBtn) {
+                clearHistoryBtn.onclick = function() {
+                    clearHistory();
+                };
+            }
+        });
+
+        function logError(error) {
+            console.error(error);
+        }
+
+        // 面板切换功能
+        function switchPanel(panelId) {
+            // 隐藏所有面板
+            const panels = ['query-panel', 'db-structure-panel', 'relationships-panel'];
+            panels.forEach(panel => {
+                document.getElementById(panel).classList.add('hidden');
+            });
+            
+            // 显示选中的面板
+            document.getElementById(panelId + '-panel').classList.remove('hidden');
+            
+            // 更新标签样式
+            const tabs = ['query-tab', 'db-structure-tab', 'relationships-tab'];
+            tabs.forEach(tab => {
+                const element = document.getElementById(tab);
+                element.classList.remove('text-primary-600', 'dark:text-primary-400', 'border-b-2', 'border-primary-500');
+                element.classList.add('text-gray-600', 'dark:text-gray-400');
+            });
+            
+            // 设置选中标签样式
+            const activeTab = panelId === 'query' ? 'query-tab' : 
+                              panelId === 'db-structure' ? 'db-structure-tab' : 'relationships-tab';
+            const tabElement = document.getElementById(activeTab);
+            tabElement.classList.remove('text-gray-600', 'dark:text-gray-400');
+            tabElement.classList.add('text-primary-600', 'dark:text-primary-400', 'border-b-2', 'border-primary-500');
+        }
+
+        // 初始化 CodeMirror 编辑器
+        function createCodeMirrorInstance(elementId, readOnly = false) {
+            // ... existing code ...
+        }
+    </script>
+</body>
+</html> 
+</html> 
