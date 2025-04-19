@@ -52,18 +52,74 @@
 
 ![image](https://github.com/user-attachments/assets/53496179-0b8d-4f7f-81d6-f73111de8bfe)
 
-## 详细讲解视频与使用教程
+## 📹 详细讲解视频与使用教程
 
-https://www.bilibili.com/video/BV1QRdoYZETh/?spm_id_from=333.1387.homepage.video_card.click&vd_source=26053b834f0ddd4f57b22169d74b6f78
+[MySQL AI 查询工具讲解与使用教程](https://www.bilibili.com/video/BV1QRdoYZETh/?spm_id_from=333.1387.homepage.video_card.click&vd_source=26053b834f0ddd4f57b22169d74b6f78)
+
+### 核心模块功能
+
+1. **`app.py`**：
+   * Flask 应用主入口
+   * 定义 Web 路由和 API 端点
+   * 连接前端请求与后端处理逻辑
+
+2. **`config.py`**：
+   * 存储 AI 模型 API 密钥和配置
+   * 数据库默认连接参数
+   * 应用全局设置
+
+3. **`llm_interaction.py`**：
+   * 负责与 AI 语言模型的交互
+   * 自然语言到 SQL 的转换核心逻辑
+   * 处理 AI 响应和解释生成
+
+4. **`db/` 模块**：
+   * **`connection.py`**：安全管理数据库连接，处理认证和连接池
+   * **`utils.py`**：提供数据库元数据分析，生成表结构信息和样本数据
+
+5. **前端资源**：
+   * **`static/js/`**：前端交互逻辑、SQL编辑器、表格展示和可视化
+   * **`static/css/`**：样式和主题设置
+   * **`templates/`**：HTML页面模板
+
+6. **`utils/` 模块**：
+   * **`prompts.py`**：为 AI 模型定义结构化提示模板
+
+## 🔄 工作流程
+
+### 自然语言查询到 SQL 的转换过程
+
+1. **用户输入处理**：
+   * 用户在 Web 界面输入自然语言问题
+   * 前端通过 AJAX 发送到后端 API
+
+2. **数据库上下文收集**：
+   * 系统获取当前数据库的表结构信息（表名、列名、数据类型、约束等）
+   * 从相关表中抽取少量样本数据，帮助 AI 理解实际内容格式
+
+3. **上下文构建与 AI 查询**：
+   * 将用户问题、数据库结构和样本数据组织成结构化提示
+   * 调用 AI 模型（如智谱 AI）API 进行处理
+   * 系统对 AI 生成的响应进行解析，提取 SQL 查询语句
+
+4. **SQL 执行与结果处理**：
+   * 执行生成的 SQL 查询语句
+   * 捕获并处理潜在错误
+   * 格式化查询结果为用户友好的表格
+
+5. **结果解释生成**：
+   * 将查询结果发送回 AI 模型
+   * 生成自然语言解释，帮助用户理解数据含义
+   * 将 SQL、结果和解释一起展示给用户
 
 ## 💻 技术栈
 
 *   **后端:**
     *   Python
-    *   Flask (或类似的 Python Web 框架)
-    *   SQLAlchemy (或类似的 ORM/DB 连接库)
+    *   Flask (Python Web 框架)
+    *   SQLAlchemy (ORM/DB 连接库)
     *   MySQL Connector Python
-    *   AI SDK (例如 Zhipu AI SDK)
+    *   智谱 AI SDK (Zhipu AI SDK)
 *   **前端:**
     *   HTML5
     *   Tailwind CSS v3
@@ -88,8 +144,8 @@ https://www.bilibili.com/video/BV1QRdoYZETh/?spm_id_from=333.1387.homepage.video
 
 1.  **克隆仓库:**
     ```bash
-    git clone https://github.com/your-username/mysql-ai-tool.git
-    cd mysql-ai-tool
+    git clone https://github.com/guangxiangdebizi/MySQL-ragLLM.git
+    cd MySQL-ragLLM
     ```
 
 2.  **创建并激活虚拟环境:**
@@ -122,7 +178,7 @@ https://www.bilibili.com/video/BV1QRdoYZETh/?spm_id_from=333.1387.homepage.video
     ```bash
     python app.py
     ```
-    *(假设你的 Flask 应用入口文件是 `app.py`)*
+    *(应用将启动 Flask 服务器)*
 
 6.  **访问应用:**
     在浏览器中打开 `http://127.0.0.1:5000` (或 Flask 运行指定的地址和端口)。
@@ -190,6 +246,12 @@ https://www.bilibili.com/video/BV1QRdoYZETh/?spm_id_from=333.1387.homepage.video
 3.  提交你的更改 (`git commit -m 'Add some AmazingFeature'`)
 4.  推送到分支 (`git push origin feature/AmazingFeature`)
 5.  打开一个 Pull Request
+
+## 📞 联系方式
+
+* **邮箱：** [guangxiangdebizi@gmail.com](mailto:guangxiangdebizi@gmail.com)
+* **领英：** [陈星宇](https://www.linkedin.com/in/星宇-陈-b5b3b0313/)
+* **GitHub：** [guangxiangdebizi](https://github.com/guangxiangdebizi/)
 
 ## 📄 许可证
 
